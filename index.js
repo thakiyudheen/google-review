@@ -23,8 +23,19 @@ const PORT = process.env.PORT || 3003;
 export async function scrapeGoogleMapsReviews(targetUrl) {
     console.log('Launching Puppeteer to scrape Google Maps Reviews...');
 
-    // Check if we are running on Vercel or AWS Lambda
-    const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION;
+    // Automatically detect cloud/server environments without hardcoding Vercel or Render
+    let isServerless = process.env.NODE_ENV === 'production';
+    
+    // Safety fallback: if we think we are local but the local browser is missing, force serverless mode
+    if (!isServerless) {
+        try {
+            const localPuppeteer = (await import('puppeteer')).default;
+            const execPath = localPuppeteer.executablePath();
+            fs.accessSync(execPath, fs.constants.X_OK); // Check if local Chrome actually exists on disk
+        } catch (e) {
+            isServerless = true;
+        }
+    }
     let launchArgs = [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -79,7 +90,7 @@ export async function scrapeGoogleMapsReviews(targetUrl) {
 
         console.log('Looking for the "Reviews" tab...');
         let clickedReviews = false;
-        
+
         const tryFindReviewsTab = async () => {
             const tabs = await page.$$('button[role="tab"]');
             for (const tab of tabs) {
