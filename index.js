@@ -314,16 +314,20 @@ app.get('/scrape', async (req, res) => {
     }
 });
 
-const server = app.listen(PORT, () => {
-    console.log(`Server is running! API is available at http://localhost:${PORT}`);
-    console.log(`Trigger a scrape by visiting: http://localhost:${PORT}/scrape`);
-    console.log(`To use a custom URL: http://localhost:${PORT}/scrape?url=YOUR_GOOGLE_MAPS_URL`);
-});
+if (require.main === module) {
+    const server = app.listen(PORT, () => {
+        console.log(`Server is running! API is available at http://localhost:${PORT}`);
+        console.log(`Trigger a scrape by visiting: http://localhost:${PORT}/scrape`);
+        console.log(`To use a custom URL: http://localhost:${PORT}/scrape?url=YOUR_GOOGLE_MAPS_URL`);
+    });
 
-server.on('error', (error) => {
-    console.error('❌ Error starting server:', error.message);
-    if (error.code === 'EADDRINUSE') {
-        console.error(`➡️ Port ${PORT} is already in use. Please stop the other server or change the port.`);
-    }
-    process.exit(1);
-});
+    server.on('error', (error) => {
+        console.error('❌ Error starting server:', error.message);
+        if (error.code === 'EADDRINUSE') {
+            console.error(`➡️ Port ${PORT} is already in use. Please stop the other server or change the port.`);
+        }
+        process.exit(1);
+    });
+}
+
+module.exports = app;
