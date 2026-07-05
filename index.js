@@ -1,33 +1,17 @@
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const fs = require('fs');
-const path = require('path');
-const express = require('express');
-const morgan = require('morgan');
+import { addExtra } from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import chromium from '@sparticuz/chromium';
+import fs from 'fs';
+import path from 'path';
+import express from 'express';
+import morgan from 'morgan';
+import { fileURLToPath } from 'url';
 
-// Force Vercel's bundler to include dynamic dependencies
-try {
-  require('fs-extra');
-  require('puppeteer-extra-plugin-stealth/evasions/chrome.app');
-  require('puppeteer-extra-plugin-stealth/evasions/chrome.csi');
-  require('puppeteer-extra-plugin-stealth/evasions/chrome.loadTimes');
-  require('puppeteer-extra-plugin-stealth/evasions/chrome.runtime');
-  require('puppeteer-extra-plugin-stealth/evasions/defaultArgs');
-  require('puppeteer-extra-plugin-stealth/evasions/iframe.contentWindow');
-  require('puppeteer-extra-plugin-stealth/evasions/media.codecs');
-  require('puppeteer-extra-plugin-stealth/evasions/navigator.hardwareConcurrency');
-  require('puppeteer-extra-plugin-stealth/evasions/navigator.languages');
-  require('puppeteer-extra-plugin-stealth/evasions/navigator.permissions');
-  require('puppeteer-extra-plugin-stealth/evasions/navigator.plugins');
-  require('puppeteer-extra-plugin-stealth/evasions/navigator.vendor');
-  require('puppeteer-extra-plugin-stealth/evasions/navigator.webdriver');
-  require('puppeteer-extra-plugin-stealth/evasions/sourceurl');
-  require('puppeteer-extra-plugin-stealth/evasions/user-agent-override');
-  require('puppeteer-extra-plugin-stealth/evasions/webgl.vendor');
-  require('puppeteer-extra-plugin-stealth/evasions/window.outerdimensions');
-  require('puppeteer-extra-plugin-user-preferences');
-  require('puppeteer-extra-plugin-user-data-dir');
-} catch (e) {}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+import puppeteerCore from 'puppeteer-core';
+const puppeteer = addExtra(puppeteerCore);
 
 puppeteer.use(StealthPlugin());
 
@@ -36,24 +20,40 @@ app.use(morgan('dev')); // HTTP request logger
 
 const PORT = process.env.PORT || 3003;
 
-async function scrapeGoogleMapsReviews(targetUrl) {
+export async function scrapeGoogleMapsReviews(targetUrl) {
     console.log('Launching Puppeteer to scrape Google Maps Reviews...');
 
+    // Check if we are running on Vercel or AWS Lambda
+    const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_VERSION;
+    let launchArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--lang=en-US',
+        '--window-size=1280,800',
+        '--disable-blink-features=AutomationControlled'
+    ];
+    let executablePath;
+
+    if (isServerless) {
+        launchArgs = chromium.args;
+        executablePath = await chromium.executablePath();
+    } else {
+        // Fallback to the local puppeteer package which works universally on Mac, Windows, Linux, Render, Docker etc.
+        const localPuppeteer = (await import('puppeteer')).default;
+        executablePath = localPuppeteer.executablePath();
+    }
+
     const browser = await puppeteer.launch({
-        // headless: true, // Run headless to hide the browser window
-        // Save browser data (cookies, login session) in a local folder so you stay logged in
-        userDataDir: path.join(__dirname, 'chrome_session'),
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--lang=en-US',
-            '--window-size=1280,800',
-            '--disable-blink-features=AutomationControlled'
-        ],
+        args: launchArgs,
+        defaultViewport: isServerless ? chromium.defaultViewport : { width: 1280, height: 800 },
+        executablePath: executablePath,
+        headless: isServerless ? chromium.headless : (process.env.HEADLESS !== 'false'),
         ignoreDefaultArgs: ['--enable-automation']
     });
 
     const page = await browser.newPage();
+    // Enforce a strict Desktop User-Agent to prevent Google Maps from serving the stripped down/mobile layout
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1280, height: 800 });
 
     try {
@@ -78,30 +78,56 @@ async function scrapeGoogleMapsReviews(targetUrl) {
         await page.waitForSelector('h1', { timeout: 15000 });
 
         console.log('Looking for the "Reviews" tab...');
-        const tabs = await page.$$('button[role="tab"]');
         let clickedReviews = false;
-        for (const tab of tabs) {
-            const text = await page.evaluate(el => el.textContent, tab);
-            if (text && text.includes('Reviews')) {
-                await tab.click();
-                clickedReviews = true;
-                console.log('Clicked "Reviews" tab.');
-                break;
+        
+        const tryFindReviewsTab = async () => {
+            const tabs = await page.$$('button[role="tab"]');
+            for (const tab of tabs) {
+                const text = await page.evaluate(el => el.textContent, tab);
+                if (text && text.includes('Reviews')) {
+                    await tab.click();
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        clickedReviews = await tryFindReviewsTab();
+
+        if (!clickedReviews) {
+            console.log('Reviews tab not found. Trying to click .wiquBf fallback...');
+            try {
+                const fallbackBtn = await page.$('.wiquBf');
+                if (fallbackBtn) {
+                    await fallbackBtn.click();
+                    console.log('Clicked .wiquBf fallback, waiting for UI to update...');
+                    await new Promise(r => setTimeout(r, 2000));
+                    clickedReviews = await tryFindReviewsTab();
+                } else {
+                    console.log('Fallback .wiquBf not found on page.');
+                }
+            } catch (e) {
+                console.log('Error clicking fallback:', e.message);
             }
         }
 
-        if (!clickedReviews) {
-            console.log('Could not find the "Reviews" tab. Reviews might be further down or on a different layout.');
+        if (clickedReviews) {
+            console.log('Successfully opened Reviews section.');
+        } else {
+            console.log('Could not find the "Reviews" tab. Taking a screenshot for debugging...');
+            await page.screenshot({ path: path.join(__dirname, 'debug_headless.png'), fullPage: true });
+            console.log('Saved debug_headless.png');
         }
 
-        // Wait a longer time to allow manual interaction if a captcha or cookie banner blocks it
-        console.log('Waiting 30 seconds. If you see a Cookie dialog, Captcha, or want to log in to Google, please do it manually now...');
-        await new Promise(r => setTimeout(r, 30000));
+        // Wait briefly for the reviews to load fully before scrolling
+        console.log('Waiting 3 seconds for reviews to render...');
+        await new Promise(r => setTimeout(r, 3000));
 
         // Scroll the reviews panel to load more
-        console.log('Scrolling to load reviews (aiming for up to 150+)...');
-        await page.evaluate(async () => {
-            for (let i = 0; i < 60; i++) {
+        console.log('Scrolling to load reviews...');
+        const scrollIterations = isServerless ? 20 : 60; // Max 60 seconds on Vercel, reduce scrolls to finish in time
+        await page.evaluate(async (iterations) => {
+            for (let i = 0; i < iterations; i++) {
                 // 1. Try scrolling by the user's explicit class just in case
                 const scrollableDiv = document.querySelector('.m6QErb.DxyBCb.kA9KIf.dS8AEf.XiKgde')
                     || document.querySelector('.m6QErb.DxyBCb.kA9KIf.dS8AEf')
@@ -119,7 +145,7 @@ async function scrapeGoogleMapsReviews(targetUrl) {
                 // Wait for network/lazy load
                 await new Promise(resolve => setTimeout(resolve, 1500));
             }
-        });
+        }, scrollIterations);
 
         console.log('Clicking "More" buttons on long reviews...');
         await page.evaluate(async () => {
@@ -338,7 +364,8 @@ app.get('/scrape', async (req, res) => {
     }
 });
 
-if (require.main === module) {
+const isMainModule = import.meta.url.startsWith('file:') && process.argv[1] === fileURLToPath(import.meta.url);
+if (isMainModule) {
     const server = app.listen(PORT, () => {
         console.log(`Server is running! API is available at http://localhost:${PORT}`);
         console.log(`Trigger a scrape by visiting: http://localhost:${PORT}/scrape`);
@@ -354,4 +381,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = app;
+export default app;
