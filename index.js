@@ -71,7 +71,9 @@ export async function scrapeGoogleMapsReviews(targetUrl) {
         console.log(`Navigating to Google Maps...`);
         // Navigate to the provided Google Maps URL
         await page.goto(targetUrl, { waitUntil: 'networkidle2' });
-
+        
+        console.log(`Navigated to Google Map with Url...`);
+        
         // Wait a random amount of time
         await new Promise(r => setTimeout(r, 2000 + Math.random() * 2000));
 
