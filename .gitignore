@@ -1,0 +1,5 @@
+node_modules/
+chrome_session/
+output/
+.env
+.DS_Store
