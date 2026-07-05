@@ -277,6 +277,22 @@ async function scrapeGoogleMapsReviews(targetUrl) {
     }
 }
 
+app.get('/', (req, res) => {
+    res.json({
+        service: "Google Maps Review Scraper API",
+        status: "online",
+        usage: {
+            endpoint: "/scrape",
+            method: "GET",
+            description: "Triggers the puppeteer scraper and automatically downloads the JSON file with the reviews.",
+            query_parameters: {
+                url: "(optional) The Google Maps URL of the business to scrape. If not provided, defaults to Jobbatical."
+            },
+            example_usage: "http://localhost:3003/scrape?url=YOUR_GOOGLE_MAPS_URL"
+        }
+    });
+});
+
 app.get('/scrape', async (req, res) => {
     // Default URL to the Jobbatical Google Maps location
     const defaultUrl = 'https://www.google.com/maps/place/Jobbatical/@59.4376249,24.7559448,17z/data=!4m12!1m2!2m1!1sSoftware+company!3m8!1s0x4692937dee7b8119:0x537449c59c834621!8m2!3d59.4376223!4d24.7608157!9m1!1b1!15sChBTb2Z0d2FyZSBjb21wYW55WhIiEHNvZnR3YXJlIGNvbXBhbnmSARBzb2Z0d2FyZV9jb21wYW554AEA!16s%2Fg%2F11b6q8qc67?entry=ttu&g_ep=EgoyMDI2MDYyOS4wIKXMDSoASAFQAw%3D%3D';
