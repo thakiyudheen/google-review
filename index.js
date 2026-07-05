@@ -115,7 +115,7 @@ async function scrapeGoogleMapsReviews(targetUrl) {
             // Google Maps review container classes
             const reviewElements = Array.from(document.querySelectorAll('.jftiEf, div[data-review-id]'));
             const delay = ms => new Promise(res => setTimeout(res, ms));
-            
+
             for (const el of reviewElements) {
                 // 1. Reviewer Name (.d4r55 is commonly used for name in the list)
                 const nameEl = el.querySelector('.d4r55') || el.querySelector('.XjcHXc');
@@ -161,13 +161,13 @@ async function scrapeGoogleMapsReviews(targetUrl) {
 
                 if (translateBtn) {
                     const isShowingTranslated = translateBtn.textContent.toLowerCase().includes('original');
-                    
+
                     translateBtn.click();
                     await delay(300); // Wait for DOM update
-                    
+
                     const newTextEl = el.querySelector('.MyEned span.wiI7pd');
                     const otherText = newTextEl ? newTextEl.textContent.trim() : '';
-                    
+
                     if (isShowingTranslated) {
                         reviewTextTranslated = currentText;
                         reviewTextOriginal = otherText;
@@ -301,7 +301,7 @@ app.get('/scrape', async (req, res) => {
     try {
         console.log(`Starting scrape request for URL: ${targetUrl}`);
         const finalReviews = await scrapeGoogleMapsReviews(targetUrl);
-        
+
         // Send the JSON as a downloadable attachment directly from memory
         res.setHeader('Content-Disposition', 'attachment; filename="google_maps_detailed_reviews.json"');
         res.setHeader('Content-Type', 'application/json');
