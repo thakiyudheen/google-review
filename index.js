@@ -105,31 +105,44 @@ export async function scrapeGoogleMapsReviews(targetUrl) {
             return false;
         };
 
-        clickedReviews = await tryFindReviewsTab();
+        // Try for up to 5 seconds to find the reviews tab or fallback (handling slow DOM renders)
+        for (let attempt = 0; attempt < 5; attempt++) {
+            clickedReviews = await tryFindReviewsTab();
+            if (clickedReviews) break;
 
-        if (!clickedReviews) {
-            console.log('Reviews tab not found. Trying to click .wiquBf fallback...');
             try {
                 const fallbackBtn = await page.$('.wiquBf');
                 if (fallbackBtn) {
+                    console.log('Reviews tab not found immediately. Trying .wiquBf fallback...');
                     await fallbackBtn.click();
                     console.log('Clicked .wiquBf fallback, waiting for UI to update...');
                     await new Promise(r => setTimeout(r, 2000));
                     clickedReviews = await tryFindReviewsTab();
-                } else {
-                    console.log('Fallback .wiquBf not found on page.');
+                    if (clickedReviews) break;
                 }
             } catch (e) {
                 console.log('Error clicking fallback:', e.message);
             }
+
+            console.log(`Reviews tab not found on attempt ${attempt + 1}. Waiting 1 second...`);
+            await new Promise(r => setTimeout(r, 1000));
         }
 
         if (clickedReviews) {
             console.log('Successfully opened Reviews section.');
         } else {
             console.log('Could not find the "Reviews" tab. Taking a screenshot for debugging...');
-            await page.screenshot({ path: path.join(__dirname, 'debug_headless.png'), fullPage: true });
-            console.log('Saved debug_headless.png');
+            const screenshotBuffer = await page.screenshot({ fullPage: true });
+            await browser.close();
+            
+            // If the user is running this via Express, they can return the image directly!
+            // But since this function is extracted, we can throw an error with the buffer,
+            // or just save it to /tmp if serverless.
+            // Wait, this is inside `scrapeGoogleMapsReviews` which returns data.
+            // We can throw a custom error to handle it in the Express route!
+            const error = new Error('Could not find the "Reviews" tab');
+            error.screenshot = screenshotBuffer;
+            throw error;
         }
 
         // Wait briefly for the reviews to load fully before scrolling
@@ -372,7 +385,20 @@ app.get('/scrape', async (req, res) => {
     } catch (error) {
         console.error('Scraping failed:', error);
         if (!res.headersSent) {
-            res.status(500).json({ error: 'Failed to scrape reviews', details: error.message });
+            if (error.screenshot) {
+                // Return an HTML page with the screenshot embedded so it perfectly renders in the browser
+                const base64Image = error.screenshot.toString('base64');
+                res.setHeader('Content-Type', 'text/html');
+                res.send(`
+                    <div style="font-family: sans-serif; padding: 20px;">
+                        <h2 style="color: red;">Scraping Failed: Reviews tab not found</h2>
+                        <p>Here is exactly what the bot saw on Google Maps when it failed:</p>
+                        <img src="data:image/png;base64,${base64Image}" style="max-width: 100%; border: 1px solid #ccc; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" />
+                    </div>
+                `);
+            } else {
+                res.status(500).json({ error: 'Failed to scrape reviews', details: error.message });
+            }
         }
     }
 });
