@@ -20,47 +20,81 @@ app.use(morgan('dev')); // HTTP request logger
 
 const PORT = process.env.PORT || 3003;
 
-export async function scrapeGoogleMapsReviews(targetUrl) {
-    console.log('Launching Puppeteer to scrape Google Maps Reviews...');
+// ---------------------------------------------------------------------------
+// BROWSER LAUNCH LOGIC (updated for reliable Vercel/serverless deployment)
+// ---------------------------------------------------------------------------
+async function getBrowser() {
+    // process.env.VERCEL is set automatically by Vercel on every deployment
+    // (production AND preview), which is more reliable than NODE_ENV alone.
+    let isServerless = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 
-    // Automatically detect cloud/server environments without hardcoding Vercel or Render
-    let isServerless = process.env.NODE_ENV === 'production';
-    
-    // Safety fallback: if we think we are local but the local browser is missing, force serverless mode
+    // Safety fallback: if we think we're local but no local Chrome exists on disk,
+    // force serverless mode anyway.
     if (!isServerless) {
         try {
             const localPuppeteer = (await import('puppeteer')).default;
             const execPath = localPuppeteer.executablePath();
-            fs.accessSync(execPath, fs.constants.X_OK); // Check if local Chrome actually exists on disk
+            fs.accessSync(execPath, fs.constants.X_OK);
         } catch (e) {
             isServerless = true;
         }
     }
-    let launchArgs = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--lang=en-US',
-        '--window-size=1280,800',
-        '--disable-blink-features=AutomationControlled'
-    ];
+
+    let launchArgs;
     let executablePath;
+    let defaultViewport;
+    let headless;
 
     if (isServerless) {
-        launchArgs = chromium.args;
+        // Reduce memory footprint — Google Maps is graphics-heavy and
+        // Vercel functions are memory constrained.
+        chromium.setGraphicsMode = false;
+
+        launchArgs = [
+            ...chromium.args,
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--lang=en-US',
+            '--window-size=1280,800',
+            '--disable-blink-features=AutomationControlled',
+            // Vercel's /dev/shm is tiny; without this Chromium can crash
+            // mid-render on heavier pages.
+            '--disable-dev-shm-usage',
+        ];
         executablePath = await chromium.executablePath();
+        defaultViewport = chromium.defaultViewport;
+        headless = chromium.headless;
     } else {
-        // Fallback to the local puppeteer package which works universally on Mac, Windows, Linux, Render, Docker etc.
+        // Local dev: full puppeteer with your machine's Chrome
         const localPuppeteer = (await import('puppeteer')).default;
+        launchArgs = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--lang=en-US',
+            '--window-size=1280,800',
+            '--disable-blink-features=AutomationControlled',
+        ];
         executablePath = localPuppeteer.executablePath();
+        defaultViewport = { width: 1280, height: 800 };
+        headless = process.env.HEADLESS !== 'false';
     }
 
-    const browser = await puppeteer.launch({
+    return puppeteer.launch({
         args: launchArgs,
-        defaultViewport: isServerless ? chromium.defaultViewport : { width: 1280, height: 800 },
-        executablePath: executablePath,
-        headless: isServerless ? chromium.headless : (process.env.HEADLESS !== 'false'),
-        ignoreDefaultArgs: ['--enable-automation']
+        defaultViewport,
+        executablePath,
+        headless,
+        ignoreDefaultArgs: ['--enable-automation'],
     });
+}
+// ---------------------------------------------------------------------------
+// END BROWSER LAUNCH LOGIC — everything below is unchanged
+// ---------------------------------------------------------------------------
+
+export async function scrapeGoogleMapsReviews(targetUrl) {
+    console.log('Launching Puppeteer to scrape Google Maps Reviews...');
+
+    const browser = await getBrowser();
 
     const page = await browser.newPage();
     // Enforce a strict Desktop User-Agent to prevent Google Maps from serving the stripped down/mobile layout
@@ -71,9 +105,9 @@ export async function scrapeGoogleMapsReviews(targetUrl) {
         console.log(`Navigating to Google Maps...`);
         // Navigate to the provided Google Maps URL
         await page.goto(targetUrl, { waitUntil: 'networkidle2' });
-        
+
         console.log(`Navigated to Google Map with Url...`);
-        
+
         // Wait a random amount of time
         await new Promise(r => setTimeout(r, 2000 + Math.random() * 2000));
 
@@ -134,7 +168,7 @@ export async function scrapeGoogleMapsReviews(targetUrl) {
             console.log('Could not find the "Reviews" tab. Taking a screenshot for debugging...');
             const screenshotBuffer = await page.screenshot({ fullPage: true });
             await browser.close();
-            
+
             // If the user is running this via Express, they can return the image directly!
             // But since this function is extracted, we can throw an error with the buffer,
             // or just save it to /tmp if serverless.
@@ -151,7 +185,8 @@ export async function scrapeGoogleMapsReviews(targetUrl) {
 
         // Scroll the reviews panel to load more
         console.log('Scrolling to load reviews...');
-        const scrollIterations = isServerless ? 20 : 60; // Max 60 seconds on Vercel, reduce scrolls to finish in time
+        const isServerlessForScroll = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+        const scrollIterations = isServerlessForScroll ? 20 : 60; // Max 60 seconds on Vercel, reduce scrolls to finish in time
         await page.evaluate(async (iterations) => {
             for (let i = 0; i < iterations; i++) {
                 // 1. Try scrolling by the user's explicit class just in case
